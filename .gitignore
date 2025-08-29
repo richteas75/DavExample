@@ -1,0 +1,2 @@
+# Exclude bash scripts with secrets
+run_andreas.sh

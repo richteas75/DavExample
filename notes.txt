@@ -1,0 +1,14 @@
+# gradlew created using
+gradle wrapper --gradle-version 8.8
+
+# build
+./gradlew jar
+
+# run 
+# on linux:
+env CALDAV_USERNAME=xxxx CALDAV_PASSWORD=yyy CALDAV_URL=https://<caldavserver> java -jar build/libs/sample_dav4jvm-1.0-SNAPSHOT.jar
+# in Windows Command Prompt, it would be:
+set CALDAV_USERNAME=xxxx
+set CALDAV_PASSWORD=yyy
+set CALDAV_URL=https://<caldavserver>
+java -jar build/libs/sample_dav4jvm-1.0-SNAPSHOT.jar
