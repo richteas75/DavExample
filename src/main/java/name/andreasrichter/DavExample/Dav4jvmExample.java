@@ -1,17 +1,22 @@
 package name.andreasrichter.DavExample;
 
 import java.io.IOException;
+
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.UUID;
 
 import at.bitfire.dav4jvm.BasicDigestAuthHandler;
 import at.bitfire.dav4jvm.DavCalendar;
 import at.bitfire.dav4jvm.DavResource;
 import at.bitfire.dav4jvm.Property;
 import at.bitfire.dav4jvm.exception.DavException;
+import at.bitfire.dav4jvm.exception.HttpException;
 import at.bitfire.dav4jvm.property.CalendarHomeSet;
 import at.bitfire.dav4jvm.property.CurrentUserPrincipal;
 import at.bitfire.dav4jvm.property.ResourceType;
@@ -22,6 +27,7 @@ import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 
 public class Dav4jvmExample {
@@ -33,8 +39,47 @@ public class Dav4jvmExample {
     // password for user, taken from environment variable CALDAV_PASSWORD
     private static final String password = System.getenv("CALDAV_PASSWORD");
     
+    private static final String icsPattern =
+            "BEGIN:VCALENDAR\r\n"+
+            "CALSCALE:GREGORIAN\r\n"+
+            "VERSION:2.0\r\n"+
+            "PRODID:testapp\r\n"+
+            "BEGIN:VTIMEZONE\r\n"+
+            "TZID:Europe/Berlin\r\n"+
+            "BEGIN:DAYLIGHT\r\n"+
+            "TZOFFSETFROM:+0100\r\n"+
+            "TZOFFSETTO:+0200\r\n"+
+            "TZNAME:CEST\r\n"+
+            "DTSTART:19700329T020000\r\n"+
+            "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\n"+
+            "END:DAYLIGHT\r\n"+
+            "BEGIN:STANDARD\r\n"+
+            "TZOFFSETFROM:+0200\r\n"+
+            "TZOFFSETTO:+0100\r\n"+
+            "TZNAME:CET\r\n"+
+            "DTSTART:19701025T030000\r\n"+
+            "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\n"+
+            "END:STANDARD\r\n"+
+            "END:VTIMEZONE\r\n"+
+            "BEGIN:VEVENT\r\n"+
+            "CREATED:%s\r\n"+ //20250829T091321Z
+            "DTSTAMP:%s\r\n"+ //20250829T091332Z
+            "LAST-MODIFIED:%s\r\n"+ //20250829T091332Z
+            "SEQUENCE:2\r\n"+
+            "UID:%s\r\n"+
+            "DTSTART;TZID=Europe/Berlin:%s\r\n"+ //20250829T130000
+            "DTEND;TZID=Europe/Berlin:%s\r\n"+ //20250829T133000
+            "STATUS:CONFIRMED\r\n"+
+            "SUMMARY:test appointment\r\n"+
+            "END:VEVENT\r\n" +
+            "END:VCALENDAR\r\n";
+    
 
     private static final Property.Name calendarType = ResourceType.Companion.getCALENDAR();
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss");
+    private static final String TZID="Europe/Berlin";
+    
+    private HttpUrl calendarUrl;
 
     /**
      * Retrieves the current-user-principal URL for the authenticated user.
@@ -99,34 +144,34 @@ public class Dav4jvmExample {
      *         or if an error occurs during the PROPFIND request.
      */
     private static HttpUrl getCalendarHomeSet( HttpUrl url) {
-        // 1. Set up the OkHttp client with authentication
-        OkHttpClient httpClient = new OkHttpClient.Builder()
-                .authenticator(new BasicDigestAuthHandler(null, user, password, false))
-                .followRedirects(false)
-                .build();
+    // 1. Set up the OkHttp client with authentication
+    OkHttpClient httpClient = new OkHttpClient.Builder()
+            .authenticator(new BasicDigestAuthHandler(null, user, password, false))
+            .followRedirects(false)
+            .build();
 
-        final HttpUrl[] homeSet = {null};
-        // propfind
-        try {
-            new DavResource(httpClient, url).propfind(0, new Property.Name[]{CalendarHomeSet.NAME}, (response, throwable) -> {
-                if (response != null) {
-                    CalendarHomeSet calendarHomeSet = response.get(CalendarHomeSet.class);
-                    if (calendarHomeSet != null && calendarHomeSet.getHref() != null) {
-                        HttpUrl resolvedUrl = response.getRequestedUrl().resolve(calendarHomeSet.getHref());
-                        if (resolvedUrl != null) {
-                            System.out.println("Found calendar-home-set: " + resolvedUrl);
-                            homeSet[0] = resolvedUrl;
-                        }
+    final HttpUrl[] homeSet = {null};
+    // propfind
+    try {
+        new DavResource(httpClient, url).propfind(0, new Property.Name[]{CalendarHomeSet.NAME}, (response, throwable) -> {
+            if (response != null) {
+                CalendarHomeSet calendarHomeSet = response.get(CalendarHomeSet.class);
+                if (calendarHomeSet != null && calendarHomeSet.getHref() != null) {
+                    HttpUrl resolvedUrl = response.getRequestedUrl().resolve(calendarHomeSet.getHref());
+                    if (resolvedUrl != null) {
+                        System.out.println("Found calendar-home-set: " + resolvedUrl);
+                        homeSet[0] = resolvedUrl;
                     }
-                } else if (throwable != null) {
-                    System.out.println("PROPFIND request failed: " + throwable.toString());
                 }
-            });
-        } catch (IOException|DavException e) {
-            System.out.println("error occured: "+e.getMessage());
-        }
-        return homeSet[0];
+            } else if (throwable != null) {
+                System.out.println("PROPFIND request failed: " + throwable.toString());
+            }
+        });
+    } catch (IOException|DavException e) {
+        System.out.println("error occured: "+e.getMessage());
     }
+    return homeSet[0];
+}
 
 
     /**
@@ -203,6 +248,73 @@ public class Dav4jvmExample {
         }
         return null;
     }
+    
+    /**
+     * Creates a sample ICS (iCalendar) string for testing purposes.
+     *
+     * <p>This method generates an ICS string representing a single event.
+     * The event is scheduled for the next day at 13:00 (Europe/Berlin timezone)
+     * and lasts for one hour.
+     *
+     * <p>The timestamps within the ICS string (CREATED, DTSTAMP, LAST-MODIFIED)
+     * are set to the current time or a second after. The DTSTART and DTEND
+     * are formatted according to the {@code DATE_TIME_FORMATTER}.
+     *
+     * <p>The method uses a predefined {@code icsPattern} which includes a VTIMEZONE
+     * definition for Europe/Berlin and a VEVENT with a summary.
+     * The UID for the event is randomly generated.
+     *
+     * @return A {@link String} containing the formatted ICS data for a sample event.
+     *         The string is generated by formatting the {@code icsPattern} with
+     *         calculated timestamps and a random UID.
+     */
+    private static String createICSString() {
+        String icsString=null;
+        // create timestamps
+        // current time/date
+        ZonedDateTime now = ZonedDateTime.now();
+        String nowString=now.format(DATE_TIME_FORMATTER);
+        ZonedDateTime nowPlus = now.plusSeconds(1);
+        String nowPlusString = nowPlus.format(DATE_TIME_FORMATTER);
+        // Add one day to the current timestamp get to the next day
+        // and set time to 13:00.
+        ZonedDateTime start = now.plusHours(24)
+                .withHour(13)
+                .withMinute(0)
+                .withSecond(0)
+                .withNano(0);
+        String startString = start.format(DATE_TIME_FORMATTER);
+        ZonedDateTime end = start.plusHours(1);
+        String endString = end.format(DATE_TIME_FORMATTER);
+        UUID uuid = UUID.randomUUID();
+        icsString=String.format(icsPattern,nowString,nowPlusString,nowString,uuid,startString,endString);
+        return icsString;
+    }
+    
+    public static void uploadICSString(HttpUrl calendarUrl, String eventString) {
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+                .authenticator(new BasicDigestAuthHandler(null, user, password, false))
+                .followRedirects(false)
+                .build();
+        UUID uuid = UUID.randomUUID();
+        HttpUrl.Builder urlBuilder = calendarUrl.newBuilder();
+        HttpUrl icsFileUrl = urlBuilder.addPathSegment(uuid + ".ics").build();
+        DavCalendar uploadCalender = new DavCalendar(httpClient, icsFileUrl);
+        RequestBody requestBody = RequestBody.create(eventString, DavCalendar.Companion.getMIME_ICALENDAR_UTF8());
+    
+        try {
+            uploadCalender.put(requestBody, null, null, false, (response) -> {
+                System.out.println("response when trying to upload ICS File: " + response.toString());
+                if (response.code()==201) {
+                    System.out.println("calendar entry successfully created.");
+                }
+            });
+        } catch (IOException | HttpException e) {
+            System.out.println("error when uploading ICS file: "+ e.getMessage());
+        }
+        
+        
+    }
 
 
     public static void main(String[] args) {
@@ -224,6 +336,7 @@ public class Dav4jvmExample {
             System.out.println("could not determine wellknown_path");
             return;
         }
+        ArrayList<HttpUrl> foundCalendarUrls = new ArrayList<>();
         try {
             // 3. get current user principal
             HttpUrl currentUserPrincipal= getCurrentUserPrincipal(HttpUrl.parse(serverURL+wellknown_path));            
@@ -247,12 +360,18 @@ public class Dav4jvmExample {
                     Set<Property.Name> prop = resourceType.getTypes();
                     if (prop.contains(calendarType)) {
                         System.out.println(response.hrefName()+": " + prop.toString());
+                        foundCalendarUrls.add(response.getHref());
                     }
                 }
             });
         } catch (IOException | DavException e) {
                 System.out.println("error occured: "+e.getMessage());
         }
+        if (foundCalendarUrls.isEmpty()) { return; }
+        // 7. create  calendar entry and upload to the first found calendar
+        HttpUrl calendarUrl=foundCalendarUrls.get(0);
+        String icsString = createICSString();
+        uploadICSString(calendarUrl, icsString);
     }
 }
 
