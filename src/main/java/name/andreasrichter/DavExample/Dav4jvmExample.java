@@ -1,11 +1,12 @@
 package name.andreasrichter.DavExample;
 
 import java.io.IOException;
-
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
+import java.util.Date;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -17,8 +18,11 @@ import at.bitfire.dav4jvm.DavResource;
 import at.bitfire.dav4jvm.Property;
 import at.bitfire.dav4jvm.exception.DavException;
 import at.bitfire.dav4jvm.exception.HttpException;
+import at.bitfire.dav4jvm.property.CalendarColor;
+import at.bitfire.dav4jvm.property.CalendarData;
 import at.bitfire.dav4jvm.property.CalendarHomeSet;
 import at.bitfire.dav4jvm.property.CurrentUserPrincipal;
+import at.bitfire.dav4jvm.property.DisplayName;
 import at.bitfire.dav4jvm.property.ResourceType;
 import at.bitfire.dav4jvm.property.SupportedCalendarComponentSet;
 import at.bitfire.dav4jvm.Response.HrefRelation;
@@ -233,20 +237,49 @@ public class Dav4jvmExample {
         }
         return null;
     }
-
-    /**
-     * Finds and returns the first ResourceType object in a list of properties.
-     *
-     * @param properties The list of properties to search.
-     * @return The found ResourceType object, or null if not found.
-     */
-    private static ResourceType findResourceType(List<Property> properties) {
-        for (Property property : properties) {
-            if (property instanceof ResourceType) {
-                return (ResourceType) property;
-            }
+    
+    private static ArrayList<HttpUrl> getCalendarEntries(HttpUrl calUrl) {
+        ArrayList<HttpUrl> calendarEntries = new ArrayList<>();
+        // set dates for searching
+        // create timestamps            
+        Instant startInstant = Instant.now();
+        Duration duration = Duration.ofHours( 24*7 );
+        Instant endInstant = startInstant.plus(duration);
+        Date start = Date.from(startInstant);
+        Date end = Date.from(endInstant);
+        // query server within date range 
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+            .authenticator(new BasicDigestAuthHandler(null, user, password, false))
+            .followRedirects(false)
+            .build();           
+        DavCalendar davCalendar = new DavCalendar(httpClient,calUrl);
+            davCalendar.calendarQuery("VEVENT", start, end, (response, b) -> {
+                System.out.println("found calendar entry: " + response.getHref().toString());
+                HttpUrl url=response.getHref();
+                calendarEntries.add(url);
+            });
+            
+        return calendarEntries;
         }
-        return null;
+    
+    private static List<String> getEventData(HttpUrl calUrl, ArrayList<HttpUrl> calendarEntries) {
+        List<String> events = new ArrayList<>();                
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+            .authenticator(new BasicDigestAuthHandler(null, user, password, false))
+            .followRedirects(false)
+            .build(); 
+        DavCalendar davCalendar = new DavCalendar(httpClient,calUrl);
+        // multiget on all calendars:
+        davCalendar.multiget(calendarEntries,null,null,(response, b) -> {
+            //System.out.println("response when trying to multiget: " + response.toString());
+            List<Property> properties = response.getProperties();
+            CalendarData calendarData = findPropertyByType(properties, CalendarData.class);
+            if (calendarData != null && calendarData.getICalendar() != null) {
+                //System.out.println("Found calendar data: " + calendarData.getICalendar());
+                events.add(calendarData.getICalendar());
+            }
+        });    
+        return events;
     }
     
     /**
@@ -315,6 +348,23 @@ public class Dav4jvmExample {
         
         
     }
+    
+    /**
+     * Finds and returns the first property of a specific type in a list of properties.
+     *
+     * @param properties The list of properties to search.
+     * @param type The class of the property to find.
+     * @param <T> The type of the property.
+     * @return The found property object, or null if not found.
+     */
+    public static <T extends Property> T findPropertyByType(List<Property> properties, Class<T> type) {
+        for (Property property : properties) {
+            if (type.isInstance(property)) {
+                return type.cast(property);
+            }
+        }
+        return null;
+    }
 
 
     public static void main(String[] args) {
@@ -352,18 +402,56 @@ public class Dav4jvmExample {
             }
             // 5. access calendars
             DavCalendar davCalendar = new DavCalendar(httpClient,calendarHomeSet);            
-            System.out.println("calendars:");
+            System.out.println("\ncalendars:");
             davCalendar.propfind(1, new SupportedCalendarComponentSet.Name[0], (response, throwable) -> {
                 List<Property> properties = response.getProperties();                                         
-                ResourceType resourceType = findResourceType(properties);
+                ResourceType resourceType = findPropertyByType(properties, ResourceType.class);
+                SupportedCalendarComponentSet supportedCalendarComponentSet = findPropertyByType(properties, SupportedCalendarComponentSet.class);
+                CalendarColor calendarColor = findPropertyByType(properties, CalendarColor.class);
+                DisplayName displayName = findPropertyByType(properties, DisplayName.class);
                 if (resourceType!=null)  {
                     Set<Property.Name> prop = resourceType.getTypes();
-                    if (prop.contains(calendarType)) {
-                        System.out.println(response.hrefName()+": " + prop.toString());
+                    if (prop.contains(calendarType) && supportedCalendarComponentSet.getSupportsEvents()) {
+                        int color=0;
+                        if (!(calendarColor ==null)) {
+                            color=calendarColor.getColor();
+                        }
+                        String name=response.hrefName();                        
+                        if (displayName!=null) {
+                            name = displayName.getDisplayName();                            
+                        }
+                        System.out.println(name+": " + prop.toString()+", color: " +color+", HrefName: "+response.hrefName()+ ", Href: "+ response.getHref());
                         foundCalendarUrls.add(response.getHref());
                     }
                 }
-            });
+            });            
+            if (foundCalendarUrls.isEmpty()) {
+                System.out.println("No calendar Urls found\n");
+                return;
+            }
+            
+            // 6. from the first calendar in foundCalendarUrls, get the element which takes place next (during next 7 days)                        
+            // query  calendar in a specific date range
+            HttpUrl firstCalUrl= foundCalendarUrls.get(0);
+            System.out.println("\nLooking for calendar entries in first calendar: "+ firstCalUrl.toString());
+                        
+            ArrayList<HttpUrl> calendarEntries = getCalendarEntries(firstCalUrl);
+            
+            // get event Data (ICalendar) for each calendar entry
+            System.out.println("\nGetting first Calendar entry ...");
+            if (!calendarEntries.isEmpty()) {                                  
+                List<String> newEvents=getEventData(firstCalUrl, calendarEntries);
+                // get first entry
+                if (!newEvents.isEmpty()) {
+                    String calData = newEvents.get(0);
+                    System.out.println("ICalendar (ics) data: " + calData);
+                } else {
+                    System.out.println("Did not find any Icalendar (ics) data");
+                }
+            } else {
+                System.out.println("Did not find any calendar entries");
+            }
+            
         } catch (IOException | DavException e) {
                 System.out.println("error occured: "+e.getMessage());
         }
@@ -371,7 +459,7 @@ public class Dav4jvmExample {
         // 7. create  calendar entry and upload to the first found calendar
         HttpUrl calendarUrl=foundCalendarUrls.get(0);
         String icsString = createICSString();
-        uploadICSString(calendarUrl, icsString);
+        //uploadICSString(calendarUrl, icsString);
     }
 }
 
