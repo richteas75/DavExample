@@ -459,7 +459,7 @@ public class Dav4jvmExample {
         // 7. create  calendar entry and upload to the first found calendar
         HttpUrl calendarUrl=foundCalendarUrls.get(0);
         String icsString = createICSString();
-        //uploadICSString(calendarUrl, icsString);
+        uploadICSString(calendarUrl, icsString);
     }
 }
 
